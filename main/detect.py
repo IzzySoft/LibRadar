@@ -21,7 +21,6 @@ from time_recorder import TimeRecord
 
 DEBUG_ON = False
 
-
 class Detector:
     """
      Detector
@@ -57,6 +56,8 @@ class Detector:
         self.project_path = os.path.dirname(sys.argv[0])
 
         self.load_data()
+        self.ljy_file = None
+        self.permission_API_dict = {}
 
     def get_smali(self, path):
         """
@@ -130,9 +131,16 @@ class Detector:
     def get_hash(self, apk_path):
         """
         Convert APK into Smali file.
-        :param path:
+        :param apk_path:
         :return: The path of apk with libs removed.
         """
+        # zip_file_name = self.project_path + '/../clean_app/' + os.path.basename(apk_path)[:-3] + 'zip'
+        # smali_path = apk_path + '/smali'
+        ljy_file_name = self.project_path + '/../LData/' + os.path.basename(apk_path) + '.txt'
+        if not os.path.exists(self.project_path + '/../LData/'):
+            os.mkdir(self.project_path + '/../LData/')
+        self.ljy_file = open(ljy_file_name, 'w')
+        self.ljy_file.write(os.path.basename(apk_path)+':\n')
 
         self.time_extract.start()
 
@@ -226,6 +234,57 @@ class Detector:
 
         for pack in self.packages_feature:
             find_features(pack)
+        '''LData
+        '''
+        
+        '''LIANG needs permission in manifest'''
+        """
+        LIANG_ON = True
+        if LIANG_ON:
+            print 'LIANG！'
+            print self.packages_feature
+        app_permission_list = []
+        for pack in self.packages_feature:
+            app_permission_list.extend(pack[4])
+        if LIANG_ON:
+            print 'LIANG！'
+            print set(app_permission_list)
+            print cur_app_libs
+        self.ljy_file.write('Permissions:\n')
+        for permission_item in set(app_permission_list):
+            self.ljy_file.write('\t' + permission_item + '\n')
+        """
+        # LJY App Permission
+        app_permission_list = []
+        mani = open(apk_path + '/AndroidManifest.xml', 'r')
+        for line in mani:
+            if 'uses-permission android:name=' in line:
+                app_permission_list.append(line.split('"')[1])
+        self.ljy_file.write('Permissions:\n')
+        for permission_item in set(app_permission_list):
+            self.ljy_file.write('\t' + permission_item + '\n')
+
+        # LJY Third-Party Library
+        self.ljy_file.write('Third-Party Library Details:' + '\n')
+        app_libs_type_dict = {}
+        for index, i in enumerate(cur_app_libs):
+            if i['tp'] not in app_libs_type_dict:
+                app_libs_type_dict[i['tp']] = [index]
+            else:
+                app_libs_type_dict[i['tp']].append(index)
+        for key_type in app_libs_type_dict:
+            self.ljy_file.write('\t' + key_type + ':' + str(app_libs_type_dict[key_type]) + '\n')
+
+        
+        # LJY API
+        self.ljy_file.write('PrivacyAPIS:' + '\n')
+        for key_permission in self.permission_API_dict:
+            self.ljy_file.write('\t' + key_permission + ':' + str(self.permission_API_dict[key_permission]) + '\n')
+
+        '''LData End
+        '''
+
+
         if DEBUG_ON:
             print "PATH and Permission:"
             for k in path_and_permission:
@@ -389,8 +448,14 @@ class Detector:
                             if permissions == -1:
                                 continue
                             # print permissions
+                            # LJYP
                             if len(permissions) != 0:
                                 for per in permissions:
+                                    if per not in self.permission_API_dict:
+                                        self.permission_API_dict[per] = [call_num]
+                                    else:
+                                        if call_num not in self.permission_API_dict[per]:
+                                            self.permission_API_dict[per].append(call_num)
                                     if per not in this_permission:
                                         this_permission.append(per)
 
