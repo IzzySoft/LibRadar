@@ -191,6 +191,18 @@ class Detector:
             """
                 packages_feature.append((bh, len(this_dict), this_call_num, '/'.join(parts), this_permission))
             """
+            """
+            bh      b_hash
+            btn     b_total_num
+            btc     b_total_call
+            sp      simplified path
+            lib     library name
+            pn      package name
+            dn      重复次数
+            ch      中文描述
+            tp      lib type
+            csp     Current S_path 在本应用中的（可能被混淆过的）包名
+            """
             if compare_d(package, self.libs_feature[mid]) == 0:
                 if self.libs_feature[mid][4] != "" and self.libs_feature[mid][4] != "Nope":
                     cur_app_libs.append({
@@ -292,7 +304,7 @@ class Detector:
         print "--Splitter--"
         final_libs_dict = {}
         for i in cur_app_libs:
-            # 先找PN
+            # 先找PN package name
             # 然后切分sp。找到对应的path
             # 然后把对应的Permission找出来加进来
             if i['pn'] in final_libs_dict:
