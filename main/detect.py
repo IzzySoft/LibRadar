@@ -147,7 +147,6 @@ class Detector:
         if not os.path.exists(self.project_path + '/../LData/'):
             os.mkdir(self.project_path + '/../LData/')
         self.ljy_file = open(ljy_file_name, 'w')
-        self.ljy_file.write(os.path.basename(apk_path)+':\n')
 
         self.time_extract.start()
 
@@ -276,7 +275,11 @@ class Detector:
         # LJY App Permission
         app_permission_list = []
         mani = open(apk_path + '/AndroidManifest.xml', 'r')
+        mani_package_name = ""
         for line in mani:
+            if 'package="' in line:
+                mani_package_name = line.split('package="')[1].split('"')[0]
+                self.ljy_file.write(mani_package_name+'\n')
             if 'uses-permission android:name=' in line:
                 app_permission_list.append(line.split('"')[1])
         self.ljy_file.write('Permissions:\n')
