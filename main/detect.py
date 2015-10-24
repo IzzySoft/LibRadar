@@ -27,6 +27,7 @@ RM_STATUS : {
 """
 RM_STATUS = 0
 DEBUG_ON = False
+DEBUG_PATH = False
 
 class Detector:
     """
@@ -65,6 +66,149 @@ class Detector:
         self.load_data()
         self.ljy_file = None
         self.permission_API_dict = {}
+
+
+    @staticmethod
+    def rm_lib_files(lib_list):
+        for lib_dir_name in lib_list:
+            cmd = 'rm -rf %s' % lib_dir_name
+            subprocess.call(cmd, shell=True)
+
+    @staticmethod
+    def zip_apk(source, target):
+        if not os.path.exists(os.path.dirname(target)):
+            os.mkdir(os.path.dirname(target))
+        file_list = []
+        if os.path.isdir(source):
+            for root, dirs, files in os.walk(source):
+                for name in files:
+                    file_list.append(os.path.join(root, name))
+        else:
+            # print '%s is not a directory.' % source
+            file_list.append(source)
+        zf = zipfile.ZipFile(target, 'w', zipfile.zlib.DEFLATED)
+        for tar in file_list:
+            arcname = tar[len(source):]
+            zf.write(tar, arcname)
+        zf.close()
+
+    def get_number(self, string):
+        """
+        Get API ID From API Dictionary.
+        获得API的编号
+        :param string: API Name+
+        :return: API ID
+        """
+        if string not in self.api_dict:
+            return -1
+        return str(self.api_dict[string]['v'])
+
+    def get_permission(self, string):
+        """
+        Get Permission From API Dictionary.
+        获得API的权限
+        :param string: API Name
+        :return: Permission List
+        """
+        if string not in self.api_dict:
+            return -1
+        return self.api_dict[string]['p']
+
+    def all_over(self, apk_path, path):
+        """
+        Recursive body of package for getting the features
+        :param apk_path: APK Path
+        :param path: Packages Path
+        :return: API Dict of this package, Directory Number in this Package, File Number, Total API Call.
+        """
+        if DEBUG_PATH:
+            print ('PATH : ' + path)
+        find_file = re.compile(r'.smali$')
+        p = re.compile(r'Landroid/.*?;?\-?>*?\(|Ljava/.*?;?\-?>*?\(|Ljavax/.*?;?\-?>*?\(|Lunit/runner/.*?;?\-?>*?\('
+                       r'|Lunit/framework/.*?;?\-?>*?\('
+                       r'|Lorg/apache/commons/logging/.*?;?\-?>*?\(|Lorg/apache/http/.*?;?\-?>*?\(|Lorg/json/.*?;'
+                       r'?\-?>*?\(|Lorg/w3c/.*?;?\-?>*?\(|Lorg/xml/.*?;?\-?>*?\(|Lorg/xmlpull/.*?;?\-?>*?\(|'
+                       r'Lcom/android/internal/util.*?;?\-?>*?\(')
+        all_thing = glob.glob('*')
+        this_permission = []
+        this_call_num = 0
+        this_dir_num = 0
+        this_file_num = 0
+        direct_dir_num = 0
+        direct_file_num = 0
+        this_dict = {}
+        for thing in all_thing:
+            # If the thing is a directory.
+            if os.path.isdir(thing):
+                if DEBUG_PATH:
+                    print ('Path and Current Work Directory.')
+                    print thing
+                    print os.getcwd()
+                os.chdir(thing + '/')
+                # Merge Dictionary
+                # 合并字典
+                child = self.all_over(apk_path, path + thing + '/')
+                if child is not None:
+                    this_dict.update(child[0])
+                    this_dir_num += child[1] + 1
+                    direct_dir_num += 1
+                    this_file_num += child[2]
+                    this_call_num += child[3]
+                    if child[4] != []:
+                        for per in child[4]:
+                            if per not in this_permission:
+                                this_permission.append(per)
+                os.chdir('..')
+            # If the 'thing' is a file
+            # 如果 thing 是一个文件
+            else:
+                try:
+                    # Is this file a smali file?
+                    # 如果这个文件是一个SMALI文件
+                    if not find_file.search(thing):
+                        continue
+                    f = open(thing, 'r')
+                    for u in f:
+                        # For every line in this file.
+                        # 搜索每一行。
+                        match = p.findall(u)
+                        for system_call in match:
+                            if '"' in system_call:
+                                continue
+                            this_call_num += 1
+                            call_num = self.get_number(system_call)
+                            permissions = self.get_permission(system_call)
+                            if permissions == -1:
+                                continue
+                            # print permissions
+                            if len(permissions) != 0:
+                                for per in permissions:
+                                    if per not in this_permission:
+                                        this_permission.append(per)
+
+                            if call_num == -1:
+                                continue
+                            if call_num in this_dict:
+                                this_dict[call_num] += 1
+                            else:
+                                this_dict[call_num] = 1
+                    f.close()
+                    this_file_num += 1
+                    direct_file_num += 1
+                except Exception as ex:
+                    if DEBUG_ON:
+                        print('Can not Open ' + thing + ' Wrong with:' + str(ex))
+        # If there is no API call in this package, just ignore it.
+        if len(this_dict) == 0:
+            return
+        if DEBUG_PATH:
+            print ('APK_PATH' + apk_path)
+        bh = 0
+        for a in this_dict:
+            bh = (bh + int(a) * this_dict[a]) % 999983          # 99983 is A Big Prime
+        self.packages_feature.append((bh, len(this_dict), this_call_num, path, this_permission))
+        return this_dict, this_dir_num, this_file_num, this_call_num, this_permission
+
 
     def get_smali(self, path):
         """
@@ -113,23 +257,15 @@ class Detector:
             """
             if "pn" in u:
                 components = u['lib'].split(';')
-                if len(components) == 3:
-                    lib_type = components[0]
-                    if lib_type in self.library_type:
-                        lib_type = self.library_type[lib_type]
-                    eng_lib = components[1]        # English Library
-                    ch_des = components[2]         # Chinese Description
-                    self.libs_feature.append(
-                        (u['bh'], u['btn'], u['btc'], u['sp'], eng_lib, u['pn'], u['dn'], ch_des, lib_type)
-                    )
-                else:
-                    lib_type = components[0]
-                    if lib_type in self.library_type:
-                        lib_type = self.library_type[lib_type]
-                    eng_lib = components[1]        # English Library
-                    self.libs_feature.append(
-                        (u['bh'],  u['btn'], u['btc'], u['sp'], eng_lib, u['pn'], u['dn'], "", lib_type)
-                    )
+                assert len(components) == 3
+                lib_type = components[0]
+                if lib_type in self.library_type:
+                    lib_type = self.library_type[lib_type]
+                eng_lib = components[1]        # English Library
+                ch_des = components[2]         # Web Link
+                self.libs_feature.append(
+                    (u['bh'], u['btn'], u['btc'], u['sp'], eng_lib, u['pn'], u['dn'], ch_des, lib_type)
+                )
             else:
                 self.libs_feature.append((u['bh'],  u['btn'], u['btc'], u['sp'], u['lib'], "", u['dn'], "", ""))
 
@@ -154,8 +290,8 @@ class Detector:
         # print apk_path+'/smali'
         if os.path.exists(apk_path+'/smali'):
             os.chdir(apk_path+'/smali')
-            self.all_over(apk_path, apk_path+'/smali')
-            os.chdir(apk_path)
+            self.all_over(apk_path, '')
+            # os.chdir(apk_path)
 
         # Print Res
         # print packages_feature
@@ -219,15 +355,15 @@ class Detector:
                         "lib": self.libs_feature[mid][4],
                         "pn": self.libs_feature[mid][5],
                         "dn": self.libs_feature[mid][6],
-                        "ch": self.libs_feature[mid][7],         # Chinese Description
+                        "ch": self.libs_feature[mid][7],         # Web Link
                         "tp": self.libs_feature[mid][8],
                         "csp": package[3],                  # Current S_path
                     })
                 elif self.libs_feature[mid][4] == "":
                     cur_app_routes[self.libs_feature[mid][3]] = {
-                        "sp": self.libs_feature[mid][3],
-                        "csp": package[3],
-                        "cp": package[4],
+                        "pn": self.libs_feature[mid][3],
+                        "cpn": package[3],
+                        "p": package[4],
                         "dn": self.libs_feature[mid][6]
                     }
             elif compare_d(package, self.libs_feature[mid]) < 0:
@@ -251,6 +387,8 @@ class Detector:
             find_feature(package, 0, number_of_tagged_libs)
 
         for pack in self.packages_feature:
+            if DEBUG_PATH:
+                print ('PACK' + str(pack))
             find_features(pack)
         '''LData
         '''
@@ -318,22 +456,31 @@ class Detector:
             # 然后切分sp。找到对应的path
             # 然后把对应的Permission找出来加进来
             if i['pn'] in final_libs_dict:
-                continue
+                # 找到同样package name的小包中，重复次数最多的，作为总的重复次数
+                # 本来想找到大包的重复次数作为重复次数，但是大包的重复次数甚至很容易直接是0
+                # 并不适合。
+                if final_libs_dict[i['pn']]['dn'] < i['dn']:
+                    final_libs_dict[i['pn']]['dn'] = i['dn']
             pn_number = len(i['pn'].split('/'))
             cpn = '/'.join(i['csp'].split('/')[0:pn_number])
+            if cpn[-1:] != '/':
+                cpn += '/'
             i['cpn'] = cpn
             i['p'] = path_and_permission[cpn]
             final_libs_dict[i['pn']] = i
             #print str(i) + ','
         final_libs_list = []
         for i in final_libs_dict:
+            final_libs_dict[i]['pn'] += '/'
             final_libs_list.append(final_libs_dict[i])
-        print json.dumps(final_libs_list)
-        print "--Splitter--"
+        # print json.dumps(final_libs_list)
         final_routes_list = []
         for i in cur_app_routes:
-            final_routes_list.append(cur_app_routes[i])
-        print json.dumps(final_routes_list)
+            cur_app_routes[i]['pn'] += '/'
+            final_libs_list.append(cur_app_routes[i])
+        sorted_libs = sorted(final_libs_list, key=lambda lib: lib['dn'], reverse=True)
+        print json.dumps(sorted_libs)
+        print "--Splitter--"
         print "--Splitter--"
         self.time_compare.end()
 
@@ -365,144 +512,3 @@ class Detector:
             self.zip_apk(smali_path, zip_file_name)
             return zip_file_name
         return "No Zip File Here."
-
-    @staticmethod
-    def rm_lib_files(lib_list):
-        for lib_dir_name in lib_list:
-            cmd = 'rm -rf %s' % lib_dir_name
-            subprocess.call(cmd, shell=True)
-
-    @staticmethod
-    def zip_apk(source, target):
-        if not os.path.exists(os.path.dirname(target)):
-            os.mkdir(os.path.dirname(target))
-        file_list = []
-        if os.path.isdir(source):
-            for root, dirs, files in os.walk(source):
-                for name in files:
-                    file_list.append(os.path.join(root, name))
-        else:
-            # print '%s is not a directory.' % source
-            file_list.append(source)
-        zf = zipfile.ZipFile(target, 'w', zipfile.zlib.DEFLATED)
-        for tar in file_list:
-            arcname = tar[len(source):]
-            zf.write(tar, arcname)
-        zf.close()
-
-    def get_number(self, string):
-        """
-        Get API ID From API Dictionary.
-        获得API的编号
-        :param string: API Name+
-        :return: API ID
-        """
-        if string not in self.api_dict:
-            return -1
-        return str(self.api_dict[string]['v'])
-
-    def get_permission(self, string):
-        """
-        Get Permission From API Dictionary.
-        获得API的权限
-        :param string: API Name
-        :return: Permission List
-        """
-        if string not in self.api_dict:
-            return -1
-        return self.api_dict[string]['p']
-
-    def all_over(self, apk_path, path):
-        """
-        Recursive body of package for getting the features
-        :param apk_path: APK Path
-        :param path: Packages Path
-        :return: API Dict of this package, Directory Number in this Package, File Number, Total API Call.
-        """
-
-        find_file = re.compile(r'.smali$')
-        p = re.compile(r'Landroid/.*?;?\-?>*?\(|Ljava/.*?;?\-?>*?\(|Ljavax/.*?;?\-?>*?\(|Lunit/runner/.*?;?\-?>*?\('
-                       r'|Lunit/framework/.*?;?\-?>*?\('
-                       r'|Lorg/apache/commons/logging/.*?;?\-?>*?\(|Lorg/apache/http/.*?;?\-?>*?\(|Lorg/json/.*?;'
-                       r'?\-?>*?\(|Lorg/w3c/.*?;?\-?>*?\(|Lorg/xml/.*?;?\-?>*?\(|Lorg/xmlpull/.*?;?\-?>*?\(|'
-                       r'Lcom/android/internal/util.*?;?\-?>*?\(')
-        all_thing = glob.glob('*')
-        this_permission = []
-        this_call_num = 0
-        this_dir_num = 0
-        this_file_num = 0
-        direct_dir_num = 0
-        direct_file_num = 0
-        this_dict = {}
-        for thing in all_thing:
-            # If the thing is a directory.
-            if os.path.isdir(thing):
-                os.chdir(path+'/'+thing)
-                # Merge Dictionary
-                # 合并字典
-                child = self.all_over(apk_path, path+'/'+thing)
-                if child is not None:
-                    this_dict.update(child[0])
-                    this_dir_num += child[1] + 1
-                    direct_dir_num += 1
-                    this_file_num += child[2]
-                    this_call_num += child[3]
-                    if child[4] != []:
-                        for per in child[4]:
-                            if per not in this_permission:
-                                this_permission.append(per)
-                os.chdir(path)
-            # If the 'thing' is a file
-            # 如果 thing 是一个文件
-            else:
-                try:
-                    # Is this file a smali file?
-                    # 如果这个文件是一个SMALI文件
-                    if not find_file.search(thing):
-                        continue
-                    f = open(thing, 'r')
-                    for u in f:
-                        # For every line in this file.
-                        # 搜索每一行。
-                        match = p.findall(u)
-                        for system_call in match:
-                            if '"' in system_call:
-                                continue
-                            this_call_num += 1
-                            call_num = self.get_number(system_call)
-                            permissions = self.get_permission(system_call)
-                            if permissions == -1:
-                                continue
-                            # print permissions
-                            # LJYP
-                            if len(permissions) != 0:
-                                for per in permissions:
-                                    if per not in self.permission_API_dict:
-                                        self.permission_API_dict[per] = [call_num]
-                                    else:
-                                        if call_num not in self.permission_API_dict[per]:
-                                            self.permission_API_dict[per].append(call_num)
-                                    if per not in this_permission:
-                                        this_permission.append(per)
-
-                            if call_num == -1:
-                                continue
-                            if call_num in this_dict:
-                                this_dict[call_num] += 1
-                            else:
-                                this_dict[call_num] = 1
-                    f.close()
-                    this_file_num += 1
-                    direct_file_num += 1
-                except Exception as ex:
-                    if DEBUG_ON:
-                        print('Can not Open ' + thing + ' Wrong with:' + str(ex))
-        # If there is no API call in this package, just ignore it.
-        if len(this_dict) == 0:
-            return
-        parts = path[len(apk_path)+7:].split("/")
-        bh = 0
-        for a in this_dict:
-            bh = (bh + int(a) * this_dict[a]) % 999983          # 99983 is A Big Prime
-        self.packages_feature.append((bh, len(this_dict), this_call_num, '/'.join(parts), this_permission))
-        return this_dict, this_dir_num, this_file_num, this_call_num, this_permission
